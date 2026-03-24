@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Xenia Shot Controller</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- ── Header ───────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="header-left">
+      <span class="logo">☕ XENIA</span>
+      <span class="subtitle">Shot Controller</span>
+    </div>
+    <div class="header-right">
+      <span id="machine-status" class="status-badge offline">OFFLINE</span>
+      <div class="mode-toggle">
+        <button id="btn-mode-auto"   class="mode-btn active" onclick="setMode('AUTO')">AUTO</button>
+        <button id="btn-mode-manual" class="mode-btn"        onclick="setMode('MANUAL')">MANUAL</button>
+      </div>
+      <button class="icon-btn" onclick="toggleSettings()" title="Settings">⚙️</button>
+    </div>
+  </header>
+
+  <!-- ── Alert bar ────────────────────────────────────────────────────────── -->
+  <div id="alert-bar" class="alert-bar hidden">
+    <span id="alert-text">—</span>
+    <button onclick="dismissAlert()">✕</button>
+  </div>
+
+  <!-- ── Main grid ────────────────────────────────────────────────────────── -->
+  <main>
+
+    <!-- Sensor panel (PRIMARY – large, left) -->
+    <section class="sensor-panel">
+      <div class="chart-title">☕ Pressure — live</div>
+      <div class="chart-wrap">
+        <canvas id="shot-chart"></canvas>
+      </div>
+
+      <div class="metric-cards">
+        <div class="metric-card" id="card-pressure">
+          <div class="metric-value" id="m-pressure">—</div>
+          <div class="metric-label">bar</div>
+        </div>
+        <div class="metric-card" id="card-time">
+          <div class="metric-value" id="m-time-remaining">—</div>
+          <div class="metric-label">remaining</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="m-bg-temp">—</div>
+          <div class="metric-label">°C brew grp</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="m-bb-temp">—</div>
+          <div class="metric-label">°C boiler</div>
+        </div>
+      </div>
+
+      <div class="phase-row">
+        <span class="phase-label">Phase</span>
+        <div class="phase-bar-wrap"><div class="phase-bar" id="phase-bar"></div></div>
+        <span class="phase-name" id="phase-name">IDLE</span>
+      </div>
+
+      <div class="stat-row"><span>Elapsed</span><span id="stat-time">00:00</span></div>
+      <div class="stat-row"><span>Target time</span><span id="stat-time-target">—</span></div>
+      <div class="stat-row"><span>Target pressure</span><span id="stat-target-p">—</span></div>
+      <div class="stat-row" id="stat-script-row"><span>Script</span><span id="stat-active-script" style="color:var(--gold);font-size:0.75rem;text-align:right;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span></div>
+    </section>
+
+    <!-- Chat panel (SECONDARY – narrow, right) -->
+    <section class="chat-panel">
+      <div class="chat-title">
+        <span>🤖 Barista Coach</span>
+        <span id="shot-phase-badge" class="phase-badge">IDLE</span>
+      </div>
+      <div id="chat-messages" class="chat-messages">
+        <div class="chat-welcome">
+          <p>Connect your machine and start a shot.</p>
+          <p>I'll watch the extraction and flag anything worth noting.</p>
+          <p class="chat-hint">Ask me anything — during or after the shot.</p>
+        </div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Ask something…"
+               onkeydown="if(event.key==='Enter')sendChat()" />
+        <button onclick="sendChat()" class="chat-send-btn">↑</button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── Controls ─────────────────────────────────────────────────────────── -->
+  <section class="controls-panel">
+
+    <!-- Manual mode: sliders (hidden in auto) -->
+    <div id="manual-param-controls" class="controls-row hidden">
+      <div class="param-group">
+        <label>Target Pressure <span id="lbl-target-pressure">9.0</span> bar</label>
+        <input type="range" id="sl-target-pressure" min="4" max="12" step="0.5" value="9.0"
+               oninput="onTargetPressureChange(this.value)" />
+      </div>
+      <div class="param-group">
+        <label>Target Time <span id="lbl-target-time">30</span> s</label>
+        <input type="range" id="sl-target-time" min="15" max="60" step="1" value="30"
+               oninput="onTargetTimeChange(this.value)" />
+      </div>
+      <div class="param-group">
+        <label>Target Temp <span id="lbl-target-temp">93.0</span> °C</label>
+        <input type="range" id="sl-target-temp" min="85" max="100" step="0.5" value="93.0"
+               oninput="onTargetTempChange(this.value)" />
+      </div>
+    </div>
+
+    <!-- Manual live controls -->
+    <div id="manual-controls" class="manual-controls hidden">
+      <div class="param-group">
+        <label>Live Pressure <span id="lbl-live-pressure">9.0</span> bar</label>
+        <input type="range" id="sl-live-pressure" min="0" max="12" step="0.1" value="9.0"
+               oninput="onLivePressureChange(this.value)" />
+      </div>
+      <div class="param-group">
+        <label>Live BB Temp <span id="lbl-live-temp">93.0</span> °C</label>
+        <input type="range" id="sl-live-temp" min="85" max="100" step="0.5" value="93.0"
+               oninput="onLiveTempChange(this.value)" />
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button id="btn-start" class="btn-start" onclick="startShot()">▶ Start Tracking</button>
+      <button id="btn-stop"  class="btn-stop"  onclick="stopShot()" disabled>■ Stop</button>
+      <p class="btn-hint" id="shot-hint">Select a script and brew — tracking starts automatically</p>
+    </div>
+  </section>
+
+  <!-- ── Scripts panel ───────────────────────────────────────────────────── -->
+  <section class="scripts-panel">
+    <div class="scripts-title">
+      <span>☕ Scripts</span>
+      <button class="icon-btn" onclick="refreshScripts()" title="Refresh scripts">↻</button>
+    </div>
+    <div id="scripts-list" class="scripts-list">
+      <span class="scripts-empty">Loading scripts…</span>
+    </div>
+  </section>
+
+  <!-- ── Shot log ─────────────────────────────────────────────────────────── -->
+  <section class="log-panel">
+    <div class="log-title">Shot Log</div>
+    <table id="shot-log-table">
+      <thead>
+        <tr>
+          <th>Time</th><th>Duration</th><th>Target</th>
+          <th>Peak P</th><th>Result</th>
+        </tr>
+      </thead>
+      <tbody id="shot-log-body">
+        <tr><td colspan="5" class="empty-log">No shots yet</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── Settings overlay ─────────────────────────────────────────────────── -->
+  <div id="settings-overlay" class="settings-overlay hidden"
+       onclick="if(event.target===this)toggleSettings()">
+    <div class="settings-panel">
+      <div class="settings-header">
+        <h2>⚙️ Settings</h2>
+        <button class="icon-btn" onclick="toggleSettings()">✕</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>Machine</h3>
+        <div class="settings-field">
+          <label>Host URL</label>
+          <input type="text" id="cfg-machine-host" placeholder="http://192.168.2.102" />
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>AI Coach (LLM)</h3>
+        <div class="settings-field">
+          <label>API Base URL</label>
+          <input type="text" id="cfg-llm-base-url" placeholder="https://api.openai.com/v1" />
+        </div>
+        <div class="settings-field">
+          <label>API Key</label>
+          <input type="password" id="cfg-llm-api-key" placeholder="sk-…" />
+        </div>
+        <div class="settings-field">
+          <label>Model</label>
+          <input type="text" id="cfg-llm-model" placeholder="gpt-4o-mini" />
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button class="btn-save" onclick="saveSettings()">💾 Save</button>
+        <button class="btn-cancel" onclick="toggleSettings()">Cancel</button>
+      </div>
+      <p id="settings-status" class="settings-status"></p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
