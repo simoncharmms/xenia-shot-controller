@@ -141,14 +141,15 @@ const chart = new Chart(ctx, {
         type: 'category',
         ticks: {
           color: '#8892a4',
-          maxTicksLimit: 10,
+          maxTicksLimit: 12,
           font: { family: "'SF Mono', 'Fira Code', monospace", size: 10 },
           callback: (val, idx) => {
             const label = chartLabels[idx];
             if (!label) return '';
             const n = parseFloat(label);
             if (isNaN(n)) return label;
-            return n % 10 === 0 ? `${n}s` : '';
+            // Show a tick at every 5-second boundary
+            return (Math.round(n * 10) % 50 === 0) ? `${n.toFixed(0)}s` : '';
           }
         },
         grid: { color: 'rgba(255,255,255,0.04)' },
@@ -342,6 +343,7 @@ function updateUI(s) {
   document.getElementById('btn-mode-manual').classList.toggle('active', isManual);
   document.getElementById('manual-controls').classList.toggle('hidden', !isManual);
   document.getElementById('manual-param-controls').classList.toggle('hidden', !isManual);
+  document.getElementById('action-row').classList.toggle('hidden', !isManual);
 
   // Sync sliders (manual only — in auto, values come from script)
   if (isManual) {

@@ -213,10 +213,10 @@ connected_clients: set = set()
 # ── LLM Client ───────────────────────────────────────────────────────────────
 
 COACHING_SYSTEM_PROMPT = """You are an expert espresso barista assistant watching a live extraction.
-You receive real-time sensor data and provide concise, actionable coaching.
-Keep tips to 1-3 sentences. Be direct, practical, speak like a knowledgeable friend.
-If there is nothing noteworthy right now, respond with exactly: NO_INSIGHT
-Do NOT repeat categories of advice already given this session."""
+You receive real-time sensor data and provide concise, live commentary on what is happening during the shot.
+Comment on the current phase, pressure behaviour, ramp progress, and extraction quality.
+Keep each comment to 1-3 sentences. Be direct, practical, speak like a knowledgeable friend.
+Always respond with a comment — never stay silent. Do NOT repeat observations already given this session."""
 
 
 def _is_anthropic(base_url: str) -> bool:
@@ -292,8 +292,8 @@ async def llm_call(messages: list[dict], system: str, max_tokens: int = 200) -> 
 # ── Coaching Engine ───────────────────────────────────────────────────────────
 
 class CoachingEngine:
-    COACH_INTERVAL = 5.0
-    FORCE_INTERVAL = 20.0
+    COACH_INTERVAL = 5.0    # minimum seconds between coaching checks
+    COMMENT_INTERVAL = 10.0  # fire a comment at least every N seconds during active shot
 
     def __init__(self):
         self.reset_for_shot()
@@ -363,10 +363,10 @@ class CoachingEngine:
         lines = [
             f"Phase: {st.phase.value}",
             f"Elapsed: {st.elapsed:.0f}s (target: {st.target_time:.0f}s)",
-            f"Pressure: {st.pressure:.2f} bar (target: {st.target_pressure:.1f} bar, trend: {trend})",
+            f"Pressure: {st.pressure:.2f} bar (scripted target now: {st._current_target_pressure:.1f} bar, final target: {st.target_pressure:.1f} bar, trend: {trend})",
             f"Boiler temps — BG: {st.bg_temp:.1f}°C, BB: {st.bb_temp:.1f}°C",
             f"Anomalies detected: {', '.join(anomalies) if anomalies else 'none'}",
-            f"Coaching categories already given this shot: {prior}",
+            f"Observations already made this shot: {prior if prior else 'none — this is the first comment'}",
         ]
         return "\n".join(lines)
 
@@ -376,24 +376,22 @@ class CoachingEngine:
 
         now = time.time()
         since_last_check = now - self._last_coach_ts
-        since_last_insight = now - self._last_insight_ts
+        since_last_comment = now - self._last_insight_ts
 
         if since_last_check < self.COACH_INTERVAL:
             return None
 
-        anomalies = self._detect_anomalies(st)
-
-        # Only proceed if there are anomalies OR we haven't said anything in FORCE_INTERVAL
-        in_extraction = st.phase == Phase.EXTRACTION
-        force = in_extraction and since_last_insight >= self.FORCE_INTERVAL and not self._insights_given
-
-        if not anomalies and not force:
+        # Don't comment on IDLE or DONE phases
+        if st.phase in (Phase.IDLE, Phase.DONE):
             self._last_coach_ts = now
             return None
 
-        # Filter already-given categories
+        # Fire if: anomaly detected, OR enough time has passed since last comment
+        anomalies = self._detect_anomalies(st)
         new_anomalies = [a for a in anomalies if a not in self._insights_given]
-        if not new_anomalies and not force:
+        due_for_comment = since_last_comment >= self.COMMENT_INTERVAL
+
+        if not new_anomalies and not due_for_comment:
             self._last_coach_ts = now
             return None
 
@@ -401,17 +399,17 @@ class CoachingEngine:
         self._last_coach_ts = now
 
         try:
-            context = self._build_context(st, new_anomalies if new_anomalies else anomalies)
+            context = self._build_context(st, new_anomalies)
             response = await llm_call(
                 [{"role": "user", "content": context}],
                 system=COACHING_SYSTEM_PROMPT,
                 max_tokens=200,
             )
 
-            if not response or response.strip().upper() == "NO_INSIGHT":
+            if not response:
                 return None
 
-            # Track categories given
+            # Track anomaly categories given
             for a in new_anomalies:
                 self._insights_given.add(a)
 
