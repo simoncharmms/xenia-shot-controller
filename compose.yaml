@@ -1,0 +1,39 @@
+services:
+  xenia:
+    build: .
+    image: xenia-shot-controller:latest
+    restart: unless-stopped
+    ports:
+      - "8765:8765"   # WebSocket
+      - "8766:8766"   # UI / HTTP API
+    volumes:
+      - xenia_data:/app/data
+    environment:
+      # Machine connection (override machine.host in config.json)
+      XENIA_HOST: "${XENIA_HOST:-}"
+      # LLM (override llm.* in config.json)
+      XENIA_LLM_BASE_URL: "${XENIA_LLM_BASE_URL:-}"
+      XENIA_LLM_API_KEY: "${XENIA_LLM_API_KEY:-}"
+      XENIA_LLM_MODEL: "${XENIA_LLM_MODEL:-}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/health')"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Demo mode — no machine needed, handy for UI dev / demos
+  xenia-demo:
+    build: .
+    image: xenia-shot-controller:latest
+    command: python controller.py --demo
+    restart: "no"
+    profiles: ["demo"]
+    ports:
+      - "8765:8765"
+      - "8766:8766"
+    volumes:
+      - xenia_data:/app/data
+
+volumes:
+  xenia_data:

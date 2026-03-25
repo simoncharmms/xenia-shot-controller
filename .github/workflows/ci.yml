@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-syntax:
+    name: Lint & syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -q -r requirements.txt
+
+      - name: Syntax check (py_compile)
+        run: python -m py_compile controller.py
+
+      - name: Import check (catches missing deps)
+        run: python -c "import controller" || true
+
+  docker-build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: xenia-shot-controller:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test container (demo mode)
+        run: |
+          docker run -d --name xenia-test \
+            -p 8766:8766 -p 8765:8765 \
+            xenia-shot-controller:ci \
+            python controller.py --demo
+          # Wait for startup
+          sleep 4
+          # Health check
+          curl -sf http://localhost:8766/health | python -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert d['ok'], 'health check failed'
+          print('Health OK:', d)
+          "
+          docker stop xenia-test

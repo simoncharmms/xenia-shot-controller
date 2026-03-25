@@ -1,3 +1,7 @@
+# Git
+.git/
+.gitignore
+
 # Python
 .venv/
 venv/
@@ -9,24 +13,19 @@ __pycache__/
 dist/
 build/
 
-# Secrets / local config
+# Secrets / local config (mount as volume instead)
 data/config.json
-.env
-
-# Shot data (personal extraction history)
 data/shots.json
 
-# macOS
+# Dev / OS
 .DS_Store
-.AppleDouble
-
-# Editors
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Logs
 *.log
 *.tmp
-/tmp/
+
+# CI / docs
+.github/
+*.md

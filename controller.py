@@ -57,18 +57,41 @@ log = logging.getLogger("xenia")
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
-    """Load config from disk, merging with defaults."""
+    """Load config from disk, then overlay environment variables.
+
+    Environment variables take precedence over config.json so Docker / CI
+    deployments can be configured without writing files.
+
+    Supported env vars:
+        XENIA_HOST            → machine.host
+        XENIA_LLM_BASE_URL    → llm.base_url
+        XENIA_LLM_API_KEY     → llm.api_key
+        XENIA_LLM_MODEL       → llm.model
+    """
     import copy
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     if CONFIG_FILE.exists():
         try:
             saved = json.loads(CONFIG_FILE.read_text())
-            # Deep-merge saved into defaults
             for section in ("machine", "llm"):
                 if section in saved and isinstance(saved[section], dict):
                     cfg[section].update(saved[section])
         except Exception as e:
             log.warning("Could not load config.json: %s", e)
+
+    # Environment variable overrides
+    env_map = {
+        "XENIA_HOST":         ("machine", "host"),
+        "XENIA_LLM_BASE_URL": ("llm",     "base_url"),
+        "XENIA_LLM_API_KEY":  ("llm",     "api_key"),
+        "XENIA_LLM_MODEL":    ("llm",     "model"),
+    }
+    for env_key, (section, field) in env_map.items():
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            cfg[section][field] = val
+            log.info("Config override from env: %s → %s.%s", env_key, section, field)
+
     return cfg
 
 
@@ -1164,6 +1187,19 @@ async def handle_command(cmd: dict, ws):
 async def http_handler(request: web.Request) -> web.Response:
     path = request.path
 
+    # ── Health check ─────────────────────────────────────────────────────────
+    if path == "/health":
+        return web.Response(
+            text=json.dumps({
+                "ok": True,
+                "machine_online": state.machine_online,
+                "shot_active": state.shot_active,
+                "phase": state.phase.value,
+                "demo": _demo_mode,
+            }),
+            content_type="application/json",
+        )
+
     # ── API routes ────────────────────────────────────────────────────────────
     if path == "/api/config":
         if request.method == "GET":
@@ -1322,6 +1358,7 @@ async def main(demo: bool = False):
     log.info("WebSocket server on ws://localhost:%d", WS_PORT)
 
     app = web.Application()
+    app.router.add_get("/health", http_handler)
     app.router.add_route("*", "/api/config", http_handler)
     app.router.add_get("/api/shots", http_handler)
     app.router.add_get("/{path:.*}", http_handler)
