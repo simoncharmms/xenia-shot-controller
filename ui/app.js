@@ -333,7 +333,7 @@ function updateUI(s) {
   // Chart
   if (s.shot_active) {
     if (!prevShotActive) clearChart();
-    pushChartData(s.elapsed, s.pressure, s.current_target_pressure || s.target_pressure);
+    pushChartData(s.elapsed, s.pressure, s.current_target_pressure != null ? s.current_target_pressure : s.target_pressure);
   }
 
   // Mode
