@@ -11,6 +11,7 @@ build/
 
 # Secrets / local config
 data/config.json
+.env
 
 # Shot data (personal extraction history)
 data/shots.json
