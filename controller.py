@@ -57,41 +57,18 @@ log = logging.getLogger("xenia")
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
-    """Load config from disk, then overlay environment variables.
-
-    Environment variables take precedence over config.json so Docker / CI
-    deployments can be configured without writing files.
-
-    Supported env vars:
-        XENIA_HOST            → machine.host
-        XENIA_LLM_BASE_URL    → llm.base_url
-        XENIA_LLM_API_KEY     → llm.api_key
-        XENIA_LLM_MODEL       → llm.model
-    """
+    """Load config from disk, merging with defaults."""
     import copy
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     if CONFIG_FILE.exists():
         try:
             saved = json.loads(CONFIG_FILE.read_text())
+            # Deep-merge saved into defaults
             for section in ("machine", "llm"):
                 if section in saved and isinstance(saved[section], dict):
                     cfg[section].update(saved[section])
         except Exception as e:
             log.warning("Could not load config.json: %s", e)
-
-    # Environment variable overrides
-    env_map = {
-        "XENIA_HOST":         ("machine", "host"),
-        "XENIA_LLM_BASE_URL": ("llm",     "base_url"),
-        "XENIA_LLM_API_KEY":  ("llm",     "api_key"),
-        "XENIA_LLM_MODEL":    ("llm",     "model"),
-    }
-    for env_key, (section, field) in env_map.items():
-        val = os.environ.get(env_key, "").strip()
-        if val:
-            cfg[section][field] = val
-            log.info("Config override from env: %s → %s.%s", env_key, section, field)
-
     return cfg
 
 
@@ -236,10 +213,10 @@ connected_clients: set = set()
 # ── LLM Client ───────────────────────────────────────────────────────────────
 
 COACHING_SYSTEM_PROMPT = """You are an expert espresso barista assistant watching a live extraction.
-You receive real-time sensor data and provide concise, live commentary on what is happening during the shot.
-Comment on the current phase, pressure behaviour, ramp progress, and extraction quality.
-Keep each comment to 1-3 sentences. Be direct, practical, speak like a knowledgeable friend.
-Always respond with a comment — never stay silent. Do NOT repeat observations already given this session."""
+You receive real-time sensor data and provide concise, actionable coaching.
+Keep tips to 1-3 sentences. Be direct, practical, speak like a knowledgeable friend.
+If there is nothing noteworthy right now, respond with exactly: NO_INSIGHT
+Do NOT repeat categories of advice already given this session."""
 
 
 def _is_anthropic(base_url: str) -> bool:
@@ -315,8 +292,8 @@ async def llm_call(messages: list[dict], system: str, max_tokens: int = 200) -> 
 # ── Coaching Engine ───────────────────────────────────────────────────────────
 
 class CoachingEngine:
-    COACH_INTERVAL = 5.0    # minimum seconds between coaching checks
-    COMMENT_INTERVAL = 10.0  # fire a comment at least every N seconds during active shot
+    COACH_INTERVAL = 5.0
+    FORCE_INTERVAL = 20.0
 
     def __init__(self):
         self.reset_for_shot()
@@ -386,10 +363,10 @@ class CoachingEngine:
         lines = [
             f"Phase: {st.phase.value}",
             f"Elapsed: {st.elapsed:.0f}s (target: {st.target_time:.0f}s)",
-            f"Pressure: {st.pressure:.2f} bar (scripted target now: {st._current_target_pressure:.1f} bar, final target: {st.target_pressure:.1f} bar, trend: {trend})",
+            f"Pressure: {st.pressure:.2f} bar (target: {st.target_pressure:.1f} bar, trend: {trend})",
             f"Boiler temps — BG: {st.bg_temp:.1f}°C, BB: {st.bb_temp:.1f}°C",
             f"Anomalies detected: {', '.join(anomalies) if anomalies else 'none'}",
-            f"Observations already made this shot: {prior if prior else 'none — this is the first comment'}",
+            f"Coaching categories already given this shot: {prior}",
         ]
         return "\n".join(lines)
 
@@ -399,22 +376,24 @@ class CoachingEngine:
 
         now = time.time()
         since_last_check = now - self._last_coach_ts
-        since_last_comment = now - self._last_insight_ts
+        since_last_insight = now - self._last_insight_ts
 
         if since_last_check < self.COACH_INTERVAL:
             return None
 
-        # Don't comment on IDLE or DONE phases
-        if st.phase in (Phase.IDLE, Phase.DONE):
+        anomalies = self._detect_anomalies(st)
+
+        # Only proceed if there are anomalies OR we haven't said anything in FORCE_INTERVAL
+        in_extraction = st.phase == Phase.EXTRACTION
+        force = in_extraction and since_last_insight >= self.FORCE_INTERVAL and not self._insights_given
+
+        if not anomalies and not force:
             self._last_coach_ts = now
             return None
 
-        # Fire if: anomaly detected, OR enough time has passed since last comment
-        anomalies = self._detect_anomalies(st)
+        # Filter already-given categories
         new_anomalies = [a for a in anomalies if a not in self._insights_given]
-        due_for_comment = since_last_comment >= self.COMMENT_INTERVAL
-
-        if not new_anomalies and not due_for_comment:
+        if not new_anomalies and not force:
             self._last_coach_ts = now
             return None
 
@@ -422,17 +401,17 @@ class CoachingEngine:
         self._last_coach_ts = now
 
         try:
-            context = self._build_context(st, new_anomalies)
+            context = self._build_context(st, new_anomalies if new_anomalies else anomalies)
             response = await llm_call(
                 [{"role": "user", "content": context}],
                 system=COACHING_SYSTEM_PROMPT,
                 max_tokens=200,
             )
 
-            if not response:
+            if not response or response.strip().upper() == "NO_INSIGHT":
                 return None
 
-            # Track anomaly categories given
+            # Track categories given
             for a in new_anomalies:
                 self._insights_given.add(a)
 
@@ -1187,19 +1166,6 @@ async def handle_command(cmd: dict, ws):
 async def http_handler(request: web.Request) -> web.Response:
     path = request.path
 
-    # ── Health check ─────────────────────────────────────────────────────────
-    if path == "/health":
-        return web.Response(
-            text=json.dumps({
-                "ok": True,
-                "machine_online": state.machine_online,
-                "shot_active": state.shot_active,
-                "phase": state.phase.value,
-                "demo": _demo_mode,
-            }),
-            content_type="application/json",
-        )
-
     # ── API routes ────────────────────────────────────────────────────────────
     if path == "/api/config":
         if request.method == "GET":
@@ -1358,7 +1324,6 @@ async def main(demo: bool = False):
     log.info("WebSocket server on ws://localhost:%d", WS_PORT)
 
     app = web.Application()
-    app.router.add_get("/health", http_handler)
     app.router.add_route("*", "/api/config", http_handler)
     app.router.add_get("/api/shots", http_handler)
     app.router.add_get("/{path:.*}", http_handler)

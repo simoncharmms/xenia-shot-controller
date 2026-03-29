@@ -130,7 +130,7 @@
       </div>
     </div>
 
-    <div class="action-row" id="action-row">
+    <div class="action-row">
       <button id="btn-start" class="btn-start" onclick="startShot()">▶ Start Tracking</button>
       <button id="btn-stop"  class="btn-stop"  onclick="stopShot()" disabled>■ Stop</button>
       <p class="btn-hint" id="shot-hint">Select a script and brew — tracking starts automatically</p>
@@ -202,6 +202,25 @@
         <button class="btn-cancel" onclick="toggleSettings()">Cancel</button>
       </div>
       <p id="settings-status" class="settings-status"></p>
+    </div>
+  </div>
+
+  <!-- ── Shot history overlay ─────────────────────────────────────────────── -->
+  <div id="shot-history-overlay" class="settings-overlay hidden"
+       onclick="if(event.target===this)closeShotHistory()">
+    <div class="settings-panel" style="max-width:680px;width:95%">
+      <div class="settings-header">
+        <h2 id="shot-history-title">Shot Profile</h2>
+        <button class="icon-btn" onclick="closeShotHistory()">✕</button>
+      </div>
+      <p id="shot-history-meta" style="font-size:0.8rem;color:var(--text-dim);margin:0 0 12px"></p>
+      <div style="position:relative;height:260px">
+        <canvas id="shot-history-chart"></canvas>
+      </div>
+      <p id="shot-history-no-data" style="display:none;color:var(--text-dim);font-size:0.85rem;margin-top:16px;text-align:center">
+        No curve data recorded for this shot.<br>
+        <span style="font-size:0.75rem">Shots recorded after the IP fix will have full curves.</span>
+      </p>
     </div>
   </div>
 

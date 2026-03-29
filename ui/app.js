@@ -141,15 +141,14 @@ const chart = new Chart(ctx, {
         type: 'category',
         ticks: {
           color: '#8892a4',
-          maxTicksLimit: 12,
+          maxTicksLimit: 10,
           font: { family: "'SF Mono', 'Fira Code', monospace", size: 10 },
           callback: (val, idx) => {
             const label = chartLabels[idx];
             if (!label) return '';
             const n = parseFloat(label);
             if (isNaN(n)) return label;
-            // Show a tick at every 5-second boundary
-            return (Math.round(n * 10) % 50 === 0) ? `${n.toFixed(0)}s` : '';
+            return n % 10 === 0 ? `${n}s` : '';
           }
         },
         grid: { color: 'rgba(255,255,255,0.04)' },
@@ -334,7 +333,7 @@ function updateUI(s) {
   // Chart
   if (s.shot_active) {
     if (!prevShotActive) clearChart();
-    pushChartData(s.elapsed, s.pressure, s.current_target_pressure != null ? s.current_target_pressure : s.target_pressure);
+    pushChartData(s.elapsed, s.pressure, s.current_target_pressure || s.target_pressure);
   }
 
   // Mode
@@ -343,7 +342,6 @@ function updateUI(s) {
   document.getElementById('btn-mode-manual').classList.toggle('active', isManual);
   document.getElementById('manual-controls').classList.toggle('hidden', !isManual);
   document.getElementById('manual-param-controls').classList.toggle('hidden', !isManual);
-  document.getElementById('action-row').classList.toggle('hidden', !isManual);
 
   // Sync sliders (manual only — in auto, values come from script)
   if (isManual) {
@@ -463,7 +461,7 @@ function renderShotLog() {
   // Store in localStorage
   try { localStorage.setItem('xenia_shots', JSON.stringify(shotLog)); } catch(e) {}
 
-  const rows = [...shotLog].reverse().slice(0, 20).map(shot => {
+  const rows = [...shotLog].reverse().slice(0, 20).map((shot, idx) => {
     const target = shot.target_time || 30;
     const dur = shot.duration_s || 0;
     let quality = 'ok', icon = '~ ok';
@@ -474,16 +472,144 @@ function renderShotLog() {
     } else if (dur > target * 1.2) {
       quality = 'poor'; icon = '✗ long';
     }
-    return `<tr>
+    const hasCurve = shot.curve && shot.curve.length > 2;
+    const rowStyle = hasCurve ? 'cursor:pointer' : '';
+    const title = hasCurve ? 'title="Click to view pressure curve"' : '';
+    // reverse index back to original shotLog index
+    const originalIdx = shotLog.length - 1 - idx;
+    return `<tr style="${rowStyle}" ${title} onclick="openShotHistory(${originalIdx})">
       <td>${shot.time_display || '—'}</td>
       <td>${dur.toFixed(0)}s</td>
       <td>${target.toFixed(0)}s</td>
       <td>${(shot.peak_pressure || 0).toFixed(1)} bar</td>
-      <td class="result-${quality}">${icon}</td>
+      <td class="result-${quality}">${icon}${hasCurve ? ' 📈' : ''}</td>
     </tr>`;
   }).join('');
 
   tbody.innerHTML = rows;
+}
+
+// ── Shot history chart ────────────────────────────────────────────────────────
+
+let _historyChart = null;
+
+function openShotHistory(idx) {
+  const shot = shotLog[idx];
+  if (!shot) return;
+
+  const overlay = document.getElementById('shot-history-overlay');
+  const noData  = document.getElementById('shot-history-no-data');
+  const canvas  = document.getElementById('shot-history-chart');
+
+  document.getElementById('shot-history-title').textContent =
+    `Shot — ${shot.ts ? shot.ts.replace('T', ' ').slice(0, 16) : shot.time_display || '?'}`;
+
+  const curve = shot.curve || [];
+
+  if (curve.length < 2) {
+    noData.style.display = 'block';
+    canvas.style.display = 'none';
+    document.getElementById('shot-history-meta').textContent = '';
+    overlay.classList.remove('hidden');
+    return;
+  }
+
+  noData.style.display = 'none';
+  canvas.style.display = 'block';
+
+  // Stats line
+  const peakP   = Math.max(...curve.map(p => p.p)).toFixed(2);
+  const dur     = shot.duration_s ? shot.duration_s.toFixed(1) + 's' : '—';
+  const target  = shot.target_pressure ? shot.target_pressure.toFixed(1) + ' bar target' : '';
+  document.getElementById('shot-history-meta').textContent =
+    `${dur} · Peak ${peakP} bar · ${curve.length} data points` + (target ? ` · ${target}` : '');
+
+  if (_historyChart) { _historyChart.destroy(); _historyChart = null; }
+
+  const ctx = canvas.getContext('2d');
+  _historyChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: curve.map(p => p.t.toFixed(1)),
+      datasets: [
+        {
+          label: 'Pressure (bar)',
+          data: curve.map(p => p.p),
+          borderColor: '#c4a882',
+          backgroundColor: 'rgba(196,168,130,0.12)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: curve.length < 30 ? 3 : 0,
+          borderWidth: 2.5,
+          yAxisID: 'y',
+        },
+        ...(shot.target_pressure ? [{
+          label: 'Target',
+          data: curve.map(() => shot.target_pressure),
+          borderColor: 'rgba(52,196,124,0.45)',
+          borderWidth: 1.5,
+          borderDash: [5, 4],
+          tension: 0,
+          fill: false,
+          pointRadius: 0,
+          yAxisID: 'y',
+        }] : []),
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        x: {
+          ticks: {
+            color: '#8892a4',
+            maxTicksLimit: 10,
+            font: { size: 10 },
+            callback: (val, idx) => {
+              const n = parseFloat(curve[idx]?.t);
+              return n % 10 === 0 ? `${n}s` : '';
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          title: { display: true, text: 'seconds', color: '#8892a4', font: { size: 10 } },
+        },
+        y: {
+          min: 0,
+          max: 13,
+          ticks: {
+            color: '#c4a882',
+            font: { size: 10 },
+            callback: v => `${v}b`,
+          },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          title: { display: true, text: 'bar', color: '#c4a882', font: { size: 10 } },
+        },
+      },
+      plugins: {
+        legend: {
+          labels: { color: '#8892a4', font: { size: 11 }, usePointStyle: true, pointStyleWidth: 10 },
+        },
+        tooltip: {
+          backgroundColor: '#111827',
+          borderColor: 'rgba(255,255,255,0.08)',
+          borderWidth: 1,
+          titleColor: '#e0e0e0',
+          bodyColor: '#8892a4',
+          callbacks: {
+            title: items => `t = ${items[0].label}s`,
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}`,
+          },
+        },
+      },
+    },
+  });
+
+  overlay.classList.remove('hidden');
+}
+
+function closeShotHistory() {
+  document.getElementById('shot-history-overlay').classList.add('hidden');
 }
 
 // ── Settings overlay ──────────────────────────────────────────────────────────

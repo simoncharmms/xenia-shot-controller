@@ -470,8 +470,6 @@ main {
   border-radius: var(--radius);
 }
 .manual-controls.hidden { display: none; }
-.manual-param-controls.hidden { display: none; }
-#action-row.hidden { display: none; }
 
 .param-group {
   display: flex;
