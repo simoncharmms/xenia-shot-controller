@@ -199,4 +199,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-*Built with [OpenClaw](https://openclaw.ai) + Claude Sonnet. Beans: Supremo Bio Espresso, Unterhaching.*
+*Beans: Supremo Bio Espresso, Unterhaching.*
